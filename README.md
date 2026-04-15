@@ -1,13 +1,13 @@
 # 5sec_video
 
 화면의 특정 영역을 선택해서 짧은 영상을 `.mp4`로 저장하는 윈도우 데스크톱 도구.
-Win+Shift+S 캡처 도구처럼 영역을 드래그로 지정하고, 녹화 버튼을 누르면 그 영역만 녹화됩니다.
+영역을 드래그로 지정하고, 녹화 버튼을 누르면 그 영역만 녹화됩니다.
 
 > 현재 상태: **MVP 완료**. 전체 계획과 결정 사항은 [PLAN.md](PLAN.md) 참고.
 
 ## 주요 기능 (목표)
 
-- 시스템 트레이에서 대기 → 아이콘 클릭 시 영역 선택 모드 진입
+- 시스템 트레이에서 대기(우측 하단 작업표시줄) → 아이콘 클릭 시 영역 선택 모드 진입
 - 마우스 드래그로 녹화할 화면 영역 지정 (재클릭 시 영역 초기화 후 재지정)
 - 녹화 / 중지 토글 버튼 + 경과 시간 표시
 - **10 / 30 / 60 fps** 선택 가능
@@ -65,7 +65,14 @@ pyinstaller --clean --noconfirm 5sec_video.spec
 > 빌드 설정 파일: [5sec_video.spec](5sec_video.spec) — `--noconsole`(트레이 앱), 사용하지 않는 PySide6 모듈 제외로 크기 최적화
 
 ## 사용 방법
-
+```bash
+git clone https://github.com/Yesthank/5sec_video.git
+cd 5sec_video
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python main.py
+```
 ### 일반 사용 (트레이 앱)
 
 ```bash
