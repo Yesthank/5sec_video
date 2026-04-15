@@ -1,0 +1,5 @@
+{
+  "save_dir": "./recordings",
+  "filename_template": "clip_%Y%m%d_%H%M%S",
+  "fps": 10
+}

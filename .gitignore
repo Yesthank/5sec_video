@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+recordings/*.mp4
+.vscode/
+.idea/
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
