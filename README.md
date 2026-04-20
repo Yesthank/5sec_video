@@ -14,7 +14,7 @@
 - 마우스 커서는 녹화 영상에 포함되지 않음
 - 저장 경로와 파일명 템플릿 지정 가능 (ComfyUI VideoCombine 노드 스타일)
   - 예: `clip_%Y%m%d_%H%M%S` → `clip_20260415_143052.mp4`
-- 오디오는 MVP에서 제외 (영상만)
+- **오디오 녹음 지원** — 기본 마이크 입력을 함께 녹음해 mp4에 muxing (설정에서 on/off)
 
 ## 요구사항
 
@@ -43,6 +43,9 @@ pip install -r requirements.txt
 | `mss` | 빠른 화면 캡처 (멀티 모니터 지원) |
 | `opencv-python` | mp4 인코딩 (`cv2.VideoWriter`, `mp4v` 코덱) |
 | `numpy` | 캡처된 프레임 변환 |
+| `sounddevice` | 마이크 오디오 캡처 (PortAudio 기반) |
+| `soundfile` | 캡처된 오디오를 WAV로 저장 |
+| `imageio-ffmpeg` | ffmpeg 실행파일 번들 — 영상 + 오디오 muxing (시스템 ffmpeg 설치 불필요) |
 
 ## .exe 빌드 (PyInstaller)
 
@@ -92,8 +95,16 @@ dist\5sec_video.exe
    - **✕** 클릭 → 종료
 4. 트레이 아이콘 **우클릭** → 메뉴
    - **영역 지정** — 새 영역 지정 시작
-   - **설정...** — 저장 폴더 / 파일명 템플릿 / 기본 FPS 변경
+   - **설정...** — 저장 폴더 / 파일명 템플릿 / 기본 FPS / 오디오 on·off 변경
    - **종료** — 앱 종료
+
+### 오디오 녹음에 대하여
+
+- 설정 다이얼로그의 **오디오** 체크박스로 마이크 녹음을 켜고 끌 수 있습니다 (기본 on)
+- 시스템의 **기본 입력 장치**(마이크)를 사용합니다 — 입력 장치 선택은 OS의 사운드 설정에서 변경
+- 녹화 정지 시 자동으로 영상과 오디오가 하나의 mp4로 muxing됩니다 (번들된 ffmpeg 사용)
+- 마이크가 없거나 캡처에 실패하면 경고 알림 후 **영상만 저장**합니다
+- 시스템 소리(스피커 출력)는 캡처 대상이 아닙니다 — 필요하면 OS에서 "스테레오 믹스" 등 가상 입력 장치를 기본 입력으로 지정하세요
 
 ### 모듈 단위 테스트
 
@@ -148,6 +159,7 @@ python -m src.recorder --x 100 --y 100 --w 640 --h 360 --fps 30 --seconds 3
 - `--w, --h` — 캡처 영역의 폭과 높이 (홀수면 자동으로 1픽셀 잘라냄)
 - `--fps` — 10, 30, 60 중 선택
 - `--seconds` — 녹화 길이(초)
+- `--audio` — 마이크 오디오도 함께 녹음해 muxing
 - `--out` — 출력 mp4 경로 (기본값: `recordings/test_YYYYMMDD_HHMMSS.mp4`)
 
 ## 폴더 구조
@@ -165,9 +177,11 @@ python -m src.recorder --x 100 --y 100 --w 640 --h 360 --fps 30 --seconds 3
 └── src/
     ├── overlay.py           # 풀스크린 영역 선택 오버레이
     ├── controller.py        # 녹화/중지 컨트롤 바
-    ├── recorder.py          # mss + cv2 화면 캡처 / mp4 인코딩
+    ├── recorder.py          # mss + cv2 화면 캡처 / mp4 인코딩 + 오디오 muxing 오케스트레이션
+    ├── audio_recorder.py    # sounddevice + soundfile 마이크 캡처 → WAV
+    ├── muxer.py             # 영상 mp4 + 오디오 wav → 최종 mp4 (ffmpeg)
     ├── config.py            # config.json 로드/저장 + 파일명 템플릿 처리
-    └── settings_dialog.py   # 저장 경로/파일명/FPS 설정 UI
+    └── settings_dialog.py   # 저장 경로/파일명/FPS/오디오 설정 UI
 ```
 
 ## 개발 진행 상황

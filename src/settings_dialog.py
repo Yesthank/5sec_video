@@ -6,6 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -62,6 +63,16 @@ class SettingsDialog(QDialog):
             self._fps_combo.addItem(f"{fps} fps", fps)
         self._fps_combo.setCurrentIndex(ALLOWED_FPS.index(self._config.fps))
 
+        # 오디오 녹음 (기본 마이크)
+        self._audio_check = QCheckBox("마이크 오디오 함께 녹음")
+        self._audio_check.setChecked(self._config.audio_enabled)
+        audio_hint = QLabel(
+            "※ 시스템의 기본 입력 장치(마이크)를 사용합니다. "
+            "장치가 없거나 캡처에 실패하면 영상만 저장됩니다."
+        )
+        audio_hint.setStyleSheet("color: #888; font-size: 11px;")
+        audio_hint.setWordWrap(True)
+
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         form.addRow("저장 폴더:", dir_widget)
@@ -69,6 +80,8 @@ class SettingsDialog(QDialog):
         form.addRow("", help_label)
         form.addRow("미리보기:", self._preview_label)
         form.addRow("기본 FPS:", self._fps_combo)
+        form.addRow("오디오:", self._audio_check)
+        form.addRow("", audio_hint)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -100,6 +113,7 @@ class SettingsDialog(QDialog):
             self._template_edit.text().strip() or "clip_%Y%m%d_%H%M%S"
         )
         self._config.fps = int(self._fps_combo.currentData())
+        self._config.audio_enabled = self._audio_check.isChecked()
         self._config.validated()
         save_config(self._config)
         self.accept()

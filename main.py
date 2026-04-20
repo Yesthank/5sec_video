@@ -137,34 +137,55 @@ class App:
             return
 
         try:
-            self.recorder = ScreenRecorder(region=self.region, fps=fps, output_path=output)
+            self.recorder = ScreenRecorder(
+                region=self.region,
+                fps=fps,
+                output_path=output,
+                audio_enabled=self.config.audio_enabled,
+            )
             self.recorder.start()
         except Exception as exc:  # noqa: BLE001
             self.recorder = None
             QMessageBox.critical(None, "5sec_video", f"녹화 시작 실패:\n{exc}")
             return
 
+        if self.recorder.audio_error:
+            # 오디오 시작 실패는 치명적이지 않음 — 트레이 알림으로만 알림
+            self.tray.showMessage(
+                "5sec_video",
+                f"오디오 시작 실패 — 영상만 녹화됩니다.\n{self.recorder.audio_error}",
+                QSystemTrayIcon.MessageIcon.Warning,
+                4000,
+            )
+
         self.current_output = output
         if self.controller is not None:
             self.controller.set_recording(True)
-        self.tray.setToolTip(f"5sec_video — 녹화 중 ({fps}fps)")
+        audio_tag = " +audio" if self.config.audio_enabled and self.recorder.audio_error is None else ""
+        self.tray.setToolTip(f"5sec_video — 녹화 중 ({fps}fps{audio_tag})")
 
     def _stop_recording(self) -> None:
         if self.recorder is None:
             return
+        recorder = self.recorder
         try:
-            out = self.recorder.stop()
+            out = recorder.stop()
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(None, "5sec_video", f"녹화 정지 실패:\n{exc}")
         else:
             size_mb = out.stat().st_size / (1024 * 1024)
+            note = ""
+            if recorder.mux_error:
+                note = "\n(오디오 muxing 실패 — 영상만 저장됨)"
+            elif recorder.audio_error and self.config.audio_enabled:
+                note = "\n(오디오 캡처 실패 — 영상만 저장됨)"
             self.tray.showMessage(
                 "5sec_video",
-                f"저장됨: {out}\n({size_mb:.1f} MB)",
+                f"저장됨: {out}\n({size_mb:.1f} MB){note}",
                 QSystemTrayIcon.MessageIcon.Information,
                 4000,
             )
-            print(f"[5sec_video] saved: {out} ({size_mb:.1f} MB)")
+            print(f"[5sec_video] saved: {out} ({size_mb:.1f} MB){note}")
         finally:
             self.recorder = None
             self.current_output = None

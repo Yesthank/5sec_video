@@ -4,15 +4,36 @@
 
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+
+from PyInstaller.utils.hooks import collect_dynamic_libs
+
 block_cipher = None
+
+
+# imageio-ffmpeg가 번들한 ffmpeg 실행파일을 EXE에 포함
+def _ffmpeg_binary():
+    try:
+        import imageio_ffmpeg
+
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        # PyInstaller가 번들의 imageio_ffmpeg/binaries/ 아래에 그대로 둬야
+        # imageio_ffmpeg.get_ffmpeg_exe()가 찾을 수 있음
+        return [(exe, os.path.join('imageio_ffmpeg', 'binaries'))]
+    except Exception:
+        return []
 
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=_ffmpeg_binary() + collect_dynamic_libs('sounddevice'),
     datas=[],
-    hiddenimports=[],
+    hiddenimports=[
+        'sounddevice',
+        'soundfile',
+        'imageio_ffmpeg',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

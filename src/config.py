@@ -33,6 +33,7 @@ class AppConfig:
     save_dir: str = "./recordings"
     filename_template: str = "clip_%Y%m%d_%H%M%S"
     fps: int = 30
+    audio_enabled: bool = True
 
     def validated(self) -> "AppConfig":
         if self.fps not in ALLOWED_FPS:
@@ -41,6 +42,7 @@ class AppConfig:
             self.filename_template = "clip_%Y%m%d_%H%M%S"
         if not self.save_dir.strip():
             self.save_dir = "./recordings"
+        self.audio_enabled = bool(self.audio_enabled)
         return self
 
 
@@ -57,6 +59,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         save_dir=str(data.get("save_dir", AppConfig.save_dir)),
         filename_template=str(data.get("filename_template", AppConfig.filename_template)),
         fps=int(data.get("fps", AppConfig.fps)),
+        audio_enabled=bool(data.get("audio_enabled", AppConfig.audio_enabled)),
     )
     return cfg.validated()
 
