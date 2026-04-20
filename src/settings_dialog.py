@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.audio_recorder import list_input_devices
 from src.config import ALLOWED_FPS, AppConfig, preview_filename, save_config
 
 
@@ -63,15 +64,44 @@ class SettingsDialog(QDialog):
             self._fps_combo.addItem(f"{fps} fps", fps)
         self._fps_combo.setCurrentIndex(ALLOWED_FPS.index(self._config.fps))
 
-        # 오디오 녹음 (기본 마이크)
-        self._audio_check = QCheckBox("마이크 오디오 함께 녹음")
+        # 오디오 녹음 on/off
+        self._audio_check = QCheckBox("오디오 함께 녹음")
         self._audio_check.setChecked(self._config.audio_enabled)
+        self._audio_check.toggled.connect(self._update_audio_enabled_state)
+
+        # 오디오 소스 (시스템 오디오 / 마이크)
+        self._audio_source_combo = QComboBox()
+        self._audio_source_combo.addItem("시스템 오디오 (스피커 소리)", "system")
+        self._audio_source_combo.addItem("마이크 (입력 장치)", "microphone")
+        idx = self._audio_source_combo.findData(self._config.audio_source)
+        self._audio_source_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._audio_source_combo.currentIndexChanged.connect(self._update_audio_enabled_state)
+
+        # 마이크 장치 선택 (microphone 모드에서만 활성)
+        self._mic_combo = QComboBox()
+        self._mic_combo.addItem("(시스템 기본 입력)", "")
+        for dev in list_input_devices():
+            self._mic_combo.addItem(dev.label(), dev.label())
+        idx = self._mic_combo.findData(self._config.audio_device)
+        self._mic_combo.setCurrentIndex(idx if idx >= 0 else 0)
+
         audio_hint = QLabel(
-            "※ 시스템의 기본 입력 장치(마이크)를 사용합니다. "
-            "장치가 없거나 캡처에 실패하면 영상만 저장됩니다."
+            "※ '시스템 오디오'는 기본 스피커로 나가는 소리(유튜브·게임 등)를 WASAPI 루프백으로 캡처합니다. "
+            "소리가 재생 중인 장치가 현재 Windows 기본 출력이어야 합니다. "
+            "'마이크'는 선택한 입력 장치에서 녹음합니다."
         )
         audio_hint.setStyleSheet("color: #888; font-size: 11px;")
         audio_hint.setWordWrap(True)
+
+        # 녹화 후 자동 압축
+        self._compress_check = QCheckBox("녹화 후 자동 압축 (H.264, 용량 축소)")
+        self._compress_check.setChecked(self._config.auto_compress)
+        compress_hint = QLabel(
+            "※ 녹화 종료 후 백그라운드에서 libx264(preset=veryfast, CRF 23)로 재인코딩합니다. "
+            "원본은 교체됩니다. 같은 길이 기준 보통 5~10배 작아집니다."
+        )
+        compress_hint.setStyleSheet("color: #888; font-size: 11px;")
+        compress_hint.setWordWrap(True)
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -81,7 +111,13 @@ class SettingsDialog(QDialog):
         form.addRow("미리보기:", self._preview_label)
         form.addRow("기본 FPS:", self._fps_combo)
         form.addRow("오디오:", self._audio_check)
+        form.addRow("오디오 소스:", self._audio_source_combo)
+        form.addRow("마이크 장치:", self._mic_combo)
         form.addRow("", audio_hint)
+        form.addRow("압축:", self._compress_check)
+        form.addRow("", compress_hint)
+
+        self._update_audio_enabled_state()
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -107,6 +143,13 @@ class SettingsDialog(QDialog):
         except Exception as exc:  # noqa: BLE001
             self._preview_label.setText(f"(템플릿 오류: {exc})")
 
+    def _update_audio_enabled_state(self) -> None:
+        enabled = self._audio_check.isChecked()
+        self._audio_source_combo.setEnabled(enabled)
+        # 마이크 장치는 오디오 on + source=microphone 때만 선택 가능
+        is_mic = self._audio_source_combo.currentData() == "microphone"
+        self._mic_combo.setEnabled(enabled and is_mic)
+
     def _on_accept(self) -> None:
         self._config.save_dir = self._dir_edit.text().strip() or "./recordings"
         self._config.filename_template = (
@@ -114,6 +157,9 @@ class SettingsDialog(QDialog):
         )
         self._config.fps = int(self._fps_combo.currentData())
         self._config.audio_enabled = self._audio_check.isChecked()
+        self._config.audio_source = str(self._audio_source_combo.currentData() or "system")
+        self._config.audio_device = str(self._mic_combo.currentData() or "")
+        self._config.auto_compress = self._compress_check.isChecked()
         self._config.validated()
         save_config(self._config)
         self.accept()

@@ -19,7 +19,7 @@ import cv2
 import mss
 import numpy as np
 
-from src.audio_recorder import AudioRecorder
+from src.audio_recorder import MicAudioRecorder, SystemAudioRecorder
 from src.muxer import mux_video_audio
 
 
@@ -49,7 +49,8 @@ class ScreenRecorder:
         output_path: Path,
         *,
         audio_enabled: bool = False,
-        audio_device: int | str | None = None,
+        audio_source: str = "system",  # "system" | "microphone"
+        audio_device: int | str | None = None,  # microphone 모드에서만 사용
     ) -> None:
         if fps not in (10, 30, 60):
             raise ValueError(f"fps must be 10, 30, or 60 (got {fps})")
@@ -65,6 +66,7 @@ class ScreenRecorder:
         )
         self.fps = fps
         self.audio_enabled = bool(audio_enabled)
+        self.audio_source = audio_source if audio_source in ("system", "microphone") else "system"
         self.audio_device = audio_device
 
         # 최종 사용자 경로와, 내부적으로 쓰는 영상 전용 경로를 분리
@@ -81,10 +83,14 @@ class ScreenRecorder:
         self._frame_count = 0
         self._writer: cv2.VideoWriter | None = None
         self._error: BaseException | None = None
-        self._audio: AudioRecorder | None = None
+        self._audio: SystemAudioRecorder | MicAudioRecorder | None = None
         # 오디오 시작에 실패했지만 녹화는 계속 — UI에서 참고용으로 읽을 수 있음
         self.audio_error: str | None = None
         self.mux_error: str | None = None
+        # 오디오 레벨 / 선택된 장치 정보 (stop 이후 읽기용)
+        self.audio_device_name: str = ""
+        self.audio_peak_dbfs: float = -120.0
+        self.audio_silent: bool = False
 
     @property
     def frame_count(self) -> int:
@@ -113,13 +119,20 @@ class ScreenRecorder:
         # 오디오 시작은 best-effort — 실패해도 영상만 저장
         self.audio_error = None
         self.mux_error = None
+        self.audio_device_name = ""
+        self.audio_peak_dbfs = -120.0
+        self.audio_silent = False
         if self.audio_enabled and self._audio_path is not None:
             try:
-                self._audio = AudioRecorder(
-                    output_path=self._audio_path,
-                    device=self.audio_device,
-                )
+                if self.audio_source == "system":
+                    self._audio = SystemAudioRecorder(output_path=self._audio_path)
+                else:
+                    self._audio = MicAudioRecorder(
+                        output_path=self._audio_path,
+                        device=self.audio_device,
+                    )
                 self._audio.start()
+                self.audio_device_name = self._audio.device_name
             except Exception as exc:  # noqa: BLE001
                 self._audio = None
                 self.audio_error = str(exc)
@@ -138,59 +151,55 @@ class ScreenRecorder:
         self._thread.join()
         self._thread = None
 
-        # 오디오 중지 (녹화 중이었다면)
+        # 오디오 중지 (녹화 중이었다면) — 어떤 결과든 레벨/무음 여부는 기록
         audio_out: Path | None = None
         if self._audio is not None:
+            audio = self._audio
+            self._audio = None
             try:
-                audio_out = self._audio.stop()
+                audio_out = audio.stop()
             except Exception as exc:  # noqa: BLE001
                 audio_out = None
                 self.audio_error = str(exc)
                 print(f"[5sec_video] audio stop failed: {exc}")
             finally:
-                self._audio = None
+                self.audio_peak_dbfs = audio.peak_dbfs
+                self.audio_silent = audio.is_silent_output()
 
-        if self._error is not None:
-            err = self._error
-            self._error = None
-            raise RuntimeError(f"recording failed: {err}") from err
+        # 여기서부터는 실패해도 반드시 임시 파일을 정리해야 하므로 try/finally로 감쌈
+        try:
+            if self._error is not None:
+                err = self._error
+                self._error = None
+                raise RuntimeError(f"recording failed: {err}") from err
 
-        if self._frame_count == 0:
-            raise RuntimeError("no frames captured")
-        if not self._video_path.exists() or self._video_path.stat().st_size == 0:
-            raise RuntimeError(f"output file missing or empty: {self._video_path}")
+            if self._frame_count == 0:
+                raise RuntimeError("no frames captured")
+            if not self._video_path.exists() or self._video_path.stat().st_size == 0:
+                raise RuntimeError(f"output file missing or empty: {self._video_path}")
 
-        # 오디오가 있으면 muxing, 아니면 영상 파일을 그대로 최종 경로로 사용
-        if self.audio_enabled and audio_out is not None and audio_out.exists() and audio_out.stat().st_size > 0:
-            try:
-                mux_video_audio(self._video_path, audio_out, self.output_path)
-            except Exception as exc:  # noqa: BLE001
-                # mux 실패 시 영상만이라도 건지기
-                self.mux_error = str(exc)
-                print(f"[5sec_video] mux failed: {exc} — saving video-only")
+            if self.audio_enabled and audio_out is not None and audio_out.exists() and audio_out.stat().st_size > 0:
                 try:
-                    if self.output_path.exists():
-                        self.output_path.unlink()
-                    self._video_path.replace(self.output_path)
-                except Exception:  # noqa: BLE001
-                    pass
-            else:
-                # 성공 — 임시 파일 정리
+                    mux_video_audio(self._video_path, audio_out, self.output_path)
+                except Exception as exc:  # noqa: BLE001
+                    # mux 실패 시 영상만이라도 건지기
+                    self.mux_error = str(exc)
+                    print(f"[5sec_video] mux failed: {exc} — saving video-only")
+                    _move_over(self._video_path, self.output_path)
+            elif self.audio_enabled:
+                # 오디오를 못 얻었으면 영상 파일을 최종 경로로 이동
+                _move_over(self._video_path, self.output_path)
+
+            if not self.output_path.exists() or self.output_path.stat().st_size == 0:
+                raise RuntimeError(f"output file missing or empty: {self.output_path}")
+
+            return self.output_path
+        finally:
+            # 최종 출력과 경로가 다른 임시 파일만 제거
+            if self._video_path != self.output_path:
                 _safe_unlink(self._video_path)
-            _safe_unlink(audio_out)
-        elif self.audio_enabled:
-            # 오디오를 못 얻었으면 영상 파일을 최종 경로로 이동
-            try:
-                if self.output_path.exists():
-                    self.output_path.unlink()
-                self._video_path.replace(self.output_path)
-            except Exception as exc:  # noqa: BLE001
-                print(f"[5sec_video] failed to move video file: {exc}")
-
-        if not self.output_path.exists() or self.output_path.stat().st_size == 0:
-            raise RuntimeError(f"output file missing or empty: {self.output_path}")
-
-        return self.output_path
+            if audio_out is not None:
+                _safe_unlink(audio_out)
 
     def _run(self) -> None:
         assert self._writer is not None
@@ -231,12 +240,26 @@ def _safe_unlink(path: Path) -> None:
         pass
 
 
+def _move_over(src: Path, dst: Path) -> None:
+    """src 파일을 dst 경로로 이동 (dst가 있으면 교체)."""
+    if src == dst:
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        try:
+            dst.unlink()
+        except Exception:  # noqa: BLE001
+            pass
+    src.replace(dst)
+
+
 def _cli_test() -> None:
     """간단한 동작 확인용 CLI.
 
     사용 예:
         python -m src.recorder --x 100 --y 100 --w 640 --h 360 --fps 30 --seconds 3
-        python -m src.recorder --audio   # 마이크도 함께 녹음
+        python -m src.recorder --audio system       # 시스템 오디오(스피커) 루프백
+        python -m src.recorder --audio microphone   # 마이크
     """
     import argparse
     from datetime import datetime
@@ -248,7 +271,12 @@ def _cli_test() -> None:
     parser.add_argument("--h", type=int, default=360)
     parser.add_argument("--fps", type=int, default=30, choices=[10, 30, 60])
     parser.add_argument("--seconds", type=float, default=3.0)
-    parser.add_argument("--audio", action="store_true", help="마이크 오디오 함께 녹음")
+    parser.add_argument(
+        "--audio",
+        choices=["off", "system", "microphone"],
+        default="off",
+        help="오디오 소스 (off=영상만, system=스피커 루프백, microphone=마이크)",
+    )
     parser.add_argument(
         "--out",
         type=Path,
@@ -261,7 +289,8 @@ def _cli_test() -> None:
         region=region,
         fps=args.fps,
         output_path=args.out,
-        audio_enabled=args.audio,
+        audio_enabled=(args.audio != "off"),
+        audio_source=args.audio if args.audio != "off" else "system",
     )
 
     print(f"recording {args.seconds}s @ {args.fps}fps (audio={args.audio}) → {args.out}")
@@ -271,10 +300,13 @@ def _cli_test() -> None:
     finally:
         out = recorder.stop()
     print(f"done. frames={recorder.frame_count}, file={out}")
+    if recorder.audio_enabled:
+        print(f"audio device: {recorder.audio_device_name!r}")
+        print(f"audio peak: {recorder.audio_peak_dbfs:.1f} dBFS  silent={recorder.audio_silent}")
     if recorder.audio_error:
-        print(f"audio: {recorder.audio_error}")
+        print(f"audio error: {recorder.audio_error}")
     if recorder.mux_error:
-        print(f"mux: {recorder.mux_error}")
+        print(f"mux error: {recorder.mux_error}")
 
 
 if __name__ == "__main__":

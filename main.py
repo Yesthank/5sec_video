@@ -13,10 +13,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QObject, QPoint, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QGuiApplication, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
+from src.compressor import compress_mp4_async
 from src.config import AppConfig, load_config, resolve_output_path
 from src.controller import ControllerBar
 from src.overlay import RegionSelector
@@ -37,6 +38,13 @@ def _make_tray_icon() -> QIcon:
     return QIcon(pix)
 
 
+class _CompressionSignals(QObject):
+    """백그라운드 스레드 → Qt 메인 스레드로 결과를 전달하는 신호."""
+
+    done = Signal(str, int, int)  # out_path, original_size, compressed_size
+    failed = Signal(str)  # error message
+
+
 class App:
     def __init__(self, qt_app: QApplication) -> None:
         self.qt_app = qt_app
@@ -47,6 +55,10 @@ class App:
         self.recorder: ScreenRecorder | None = None
         self.region: Region | None = None
         self.current_output: Path | None = None
+
+        self._compress_signals = _CompressionSignals()
+        self._compress_signals.done.connect(self._on_compress_done)
+        self._compress_signals.failed.connect(self._on_compress_failed)
 
         self.tray = QSystemTrayIcon(_make_tray_icon())
         self.tray.setToolTip("5sec_video — 클릭하여 영역 지정")
@@ -142,6 +154,8 @@ class App:
                 fps=fps,
                 output_path=output,
                 audio_enabled=self.config.audio_enabled,
+                audio_source=self.config.audio_source,
+                audio_device=self.config.audio_device or None,
             )
             self.recorder.start()
         except Exception as exc:  # noqa: BLE001
@@ -161,7 +175,9 @@ class App:
         self.current_output = output
         if self.controller is not None:
             self.controller.set_recording(True)
-        audio_tag = " +audio" if self.config.audio_enabled and self.recorder.audio_error is None else ""
+        audio_tag = ""
+        if self.config.audio_enabled and self.recorder.audio_error is None:
+            audio_tag = " +sys audio" if self.config.audio_source == "system" else " +mic"
         self.tray.setToolTip(f"5sec_video — 녹화 중 ({fps}fps{audio_tag})")
 
     def _stop_recording(self) -> None:
@@ -179,6 +195,15 @@ class App:
                 note = "\n(오디오 muxing 실패 — 영상만 저장됨)"
             elif recorder.audio_error and self.config.audio_enabled:
                 note = "\n(오디오 캡처 실패 — 영상만 저장됨)"
+            elif (
+                self.config.audio_enabled
+                and not recorder.audio_error
+                and recorder.audio_silent
+            ):
+                note = (
+                    f"\n(경고: 오디오 무음 감지 — peak {recorder.audio_peak_dbfs:.1f} dBFS. "
+                    "시스템 오디오는 기본 스피커로 소리가 재생 중이어야 캡처됩니다.)"
+                )
             self.tray.showMessage(
                 "5sec_video",
                 f"저장됨: {out}\n({size_mb:.1f} MB){note}",
@@ -186,12 +211,59 @@ class App:
                 4000,
             )
             print(f"[5sec_video] saved: {out} ({size_mb:.1f} MB){note}")
+
+            if self.config.auto_compress:
+                self._start_compression(out)
         finally:
             self.recorder = None
             self.current_output = None
             self.tray.setToolTip("5sec_video — 클릭하여 영역 지정")
             if self.controller is not None:
                 self.controller.set_recording(False)
+
+    # ── 압축 ──────────────────────────────────────────────────────────────
+    def _start_compression(self, path: Path) -> None:
+        self.tray.showMessage(
+            "5sec_video",
+            f"압축 중... ({path.name})",
+            QSystemTrayIcon.MessageIcon.Information,
+            2500,
+        )
+        signals = self._compress_signals
+
+        def _on_success(out: Path, original: int, compressed: int) -> None:
+            signals.done.emit(str(out), original, compressed)
+
+        def _on_error(exc: BaseException) -> None:
+            signals.failed.emit(str(exc))
+
+        compress_mp4_async(
+            path,
+            on_success=_on_success,
+            on_error=_on_error,
+        )
+
+    def _on_compress_done(self, out_path: str, original: int, compressed: int) -> None:
+        orig_mb = original / (1024 * 1024)
+        comp_mb = compressed / (1024 * 1024)
+        ratio = (compressed / original) if original > 0 else 1.0
+        self.tray.showMessage(
+            "5sec_video",
+            f"압축 완료: {Path(out_path).name}\n"
+            f"{orig_mb:.1f} MB → {comp_mb:.1f} MB ({ratio * 100:.0f}%)",
+            QSystemTrayIcon.MessageIcon.Information,
+            4000,
+        )
+        print(f"[5sec_video] compressed: {out_path} ({orig_mb:.1f} → {comp_mb:.1f} MB)")
+
+    def _on_compress_failed(self, message: str) -> None:
+        self.tray.showMessage(
+            "5sec_video",
+            f"압축 실패 — 원본은 그대로 유지됩니다.\n{message}",
+            QSystemTrayIcon.MessageIcon.Warning,
+            4000,
+        )
+        print(f"[5sec_video] compress failed: {message}")
 
     # ── 설정 / 종료 ───────────────────────────────────────────────────────
     def _open_settings(self) -> None:

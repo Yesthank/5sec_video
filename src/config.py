@@ -28,12 +28,18 @@ def resolve_save_dir(save_dir: str | Path) -> Path:
     return p.resolve()
 
 
+AUDIO_SOURCES = ("system", "microphone")
+
+
 @dataclass
 class AppConfig:
     save_dir: str = "./recordings"
     filename_template: str = "clip_%Y%m%d_%H%M%S"
     fps: int = 30
     audio_enabled: bool = True
+    audio_source: str = "system"  # "system" = 스피커 루프백, "microphone" = 마이크
+    audio_device: str = ""  # microphone 모드에서만 사용. "" = 시스템 기본 입력
+    auto_compress: bool = False  # 녹화 후 libx264로 자동 재인코딩 (용량 축소)
 
     def validated(self) -> "AppConfig":
         if self.fps not in ALLOWED_FPS:
@@ -43,6 +49,10 @@ class AppConfig:
         if not self.save_dir.strip():
             self.save_dir = "./recordings"
         self.audio_enabled = bool(self.audio_enabled)
+        if self.audio_source not in AUDIO_SOURCES:
+            self.audio_source = "system"
+        self.audio_device = str(self.audio_device or "")
+        self.auto_compress = bool(self.auto_compress)
         return self
 
 
@@ -60,6 +70,9 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         filename_template=str(data.get("filename_template", AppConfig.filename_template)),
         fps=int(data.get("fps", AppConfig.fps)),
         audio_enabled=bool(data.get("audio_enabled", AppConfig.audio_enabled)),
+        audio_source=str(data.get("audio_source", AppConfig.audio_source)),
+        audio_device=str(data.get("audio_device", AppConfig.audio_device)),
+        auto_compress=bool(data.get("auto_compress", AppConfig.auto_compress)),
     )
     return cfg.validated()
 
